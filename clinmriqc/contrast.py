@@ -9,7 +9,7 @@ vessels appear as a cluster of voxels well above the white matter peak.
 import numpy as np
 import argparse
 import json
-import nibabel as nib
+from clinmriqc.general import load_nifti
 
 def compute_vessel_intensity_ratio(image: np.ndarray, brain_mask: np.ndarray) -> float:
     """Ratio of the extreme-bright tail (99.9th percentile) to the bulk tissue (50th percentile) intensity.
@@ -98,8 +98,9 @@ def main():
     parser.add_argument("--outfile", default=None, help="Optional path to save JSON results")
     args = parser.parse_args()
     
-    image_arr = nib.load(args.image).get_fdata()
-    mask_arr = nib.load(args.brain_mask).get_fdata().astype(bool)
+    # load nifti file
+    image_arr = load_nifti(args.image)
+    mask_arr = load_nifti(args.brain_mask).astype(bool)
 
     results = detect_contrast_enhancement(image_arr, mask_arr)
     output = json.dumps(results, indent=2)

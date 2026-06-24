@@ -8,6 +8,7 @@ import os
 import nibabel as nib
 import pandas as pd
 from clinmriqc.contrast import detect_contrast_enhancement
+from clinmriqc.general import load_nifti
  
 
 #%% 
@@ -33,8 +34,8 @@ for subject in subjects:
         brain_mask = os.path.join(folder, subject, 'brainmask.nii.gz')
         
         # load nifti file
-        image_arr = nib.load(image).get_fdata()
-        mask_arr = nib.load(brain_mask).get_fdata().astype(bool)
+        image_arr = load_nifti(image)
+        mask_arr = load_nifti(brain_mask).astype(bool)
 
         # detect contrast
         results = detect_contrast_enhancement(image_arr, 
