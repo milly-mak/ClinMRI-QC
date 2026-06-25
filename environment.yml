@@ -8,6 +8,7 @@ dependencies:
   - nibabel>=5.0
   - pytest>=8.0
   - ipykernel
+  - brainchop=0.2.5
   - pip
   - pip:
       - -e .
