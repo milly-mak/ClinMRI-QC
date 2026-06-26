@@ -1,9 +1,26 @@
-import argparse
+import json
 import os
-import sys
-import numpy as np 
-import nibabel
 import tempfile
+from pathlib import Path
+
+import nibabel
+import numpy as np
+
+_DEFAULT_CONFIG = Path(__file__).parent.parent / "config" / "default.json"
+
+
+def load_config(path: str | Path | None = None) -> dict:
+    """Load QC thresholds from a JSON config file.
+
+    Args:
+        path: Path to a JSON config file. Defaults to config/default.json.
+
+    Returns:
+        Dictionary of thresholds and parameters.
+    """
+    config_path = Path(path) if path else _DEFAULT_CONFIG
+    with open(config_path) as f:
+        return json.load(f)
 
 def load_nifti (path:str) -> np.ndarray: 
     img = nibabel.load(path)

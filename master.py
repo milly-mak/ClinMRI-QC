@@ -38,7 +38,6 @@ Options
 -------
     --images_dir    Directory of .nii / .nii.gz T1w scans  [required]
     --output_dir    Where to write qc_results.csv and qc_report.html  [required]
-    --model_path    Path to best_regression_model.pt  [default: bundled]
     --device        'cpu' or 'cuda'  [default: auto-detect]
     --limit         Process only the first N scans
     --no_resume     Reprocess scans already present in the CSV
@@ -59,7 +58,7 @@ import numpy as np
 # clinmriqc/ lives alongside this script at the repo root.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from clinmriqc.general          import load_nifti, get_brain_mask
+from clinmriqc.general          import load_nifti, get_brain_mask, load_config
 from clinmriqc.artifacts        import detect_artifacts
 from clinmriqc.contrast         import detect_contrast_enhancement
 from clinmriqc.generate_csv     import build_qc_record
@@ -87,30 +86,47 @@ def _already_processed(csv_path: Path) -> set:
 # Per-scan pipeline
 # ---------------------------------------------------------------------------
 
-def process_scan(img_path: Path, model, device: str) -> tuple:
+def process_scan(img_path: Path, device: str, cfg: dict) -> tuple:
     """Run the full QC pipeline for one scan.
 
-    Returns (artifacts_result, contrast_result).
+    Args:
+        img_path: Path to the NIfTI file.
+        device: 'cpu' or 'cuda'.
+        cfg: Config dict loaded from default.json (or a custom override).
+
+    Returns:
+        (artifacts_result, contrast_result)
     """
     image = load_nifti(str(img_path))
 
     # Skull-strip via brainchop. get_brain_mask uses _save_inverse_conform so
     # the returned mask is already at native image resolution.
     brain_mask = get_brain_mask(str(img_path))
-
-    if brain_mask.shape != image.shape:
-        # Safety net in case brainchop returns a different shape.
-        from scipy.ndimage import zoom as _zoom
-        factors    = np.array(image.shape, dtype=float) / np.array(brain_mask.shape, dtype=float)
-        brain_mask = _zoom(brain_mask.astype(np.float32), factors, order=0) > 0.5
-
+    
     # Empty mask (unusual acquisitions) — fall back to None so each downstream
     # function uses its own internal masking strategy.
     if brain_mask.sum() == 0:
         brain_mask = None
 
-    art = detect_artifacts(image, brain_mask=brain_mask, model=model, device=device)
-    con = detect_contrast_enhancement(image, brain_mask)
+    art_cfg = cfg["check_artifacts"]
+    _log(f'Loading artifact model from {art_cfg["model_path"]} ...')
+    model = load_regression_model(art_cfg["model_path"], device=device)
+    _log('Model loaded.')
+    art = detect_artifacts(
+        image,
+        brain_mask=brain_mask,
+        model=model,
+        device=device,
+        class_thresholds={k: v for k, v in art_cfg["class_thresholds"].items() if v is not None} or None,
+    )
+
+    con_cfg = cfg["check_contrast_enhancement"]
+    con = detect_contrast_enhancement(
+        image,
+        brain_mask,
+        vessel_ratio_threshold=con_cfg["vessel_ratio_threshold"],
+        bright_fraction_threshold=con_cfg["bright_fraction_threshold"],
+    )
 
     return art, con
 
@@ -122,12 +138,15 @@ def process_scan(img_path: Path, model, device: str) -> tuple:
 def run(
     images_dir: str,
     output_dir: str,
-    model_path: str,
     device: str,
     limit: int,
     resume: bool,
     exclude_prefix: str,
+    config_path: str | None = None,
 ):
+    cfg = load_config(config_path)
+    _log(f'Config loaded from {config_path or "default"}')
+
     images_dir = Path(images_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -151,10 +170,6 @@ def run(
         _log(f'Resuming: {len(done)} already done, '
              f'{len(image_files) - len(done)} remaining')
 
-    _log(f'Loading artifact model from {model_path} ...')
-    model = load_regression_model(model_path, device=device)
-    _log('Model loaded.')
-
     n_done = n_skip = n_errors = 0
     t_start = time.time()
 
@@ -167,7 +182,7 @@ def run(
 
         t0 = time.time()
         try:
-            art, con = process_scan(img_path, model, device)
+            art, con = process_scan(img_path, device, cfg)
 
             record = build_qc_record(
                 image_path=img_path,
@@ -205,11 +220,6 @@ def run(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _default_model() -> str:
-    return str(
-        Path(__file__).parent / 'clinmriqc' / 'classifier' / 'best_regression_model.pt'
-    )
-
 
 def main():
     ap = argparse.ArgumentParser(
@@ -221,8 +231,6 @@ def main():
                     help='Directory of T1w NIfTI scans')
     ap.add_argument('--output_dir',     required=True,
                     help='Output directory for CSV and HTML report')
-    ap.add_argument('--model_path',     default=_default_model(),
-                    help='Path to best_regression_model.pt  [default: bundled]')
     ap.add_argument('--device',         default=None,
                     help="'cpu' or 'cuda'  [default: auto-detect]")
     ap.add_argument('--limit',          type=int, default=None,
@@ -231,21 +239,18 @@ def main():
                     help='Reprocess scans already in the CSV')
     ap.add_argument('--exclude_prefix', default='synthetic_',
                     help="Skip files starting with this prefix  [default: 'synthetic_']")
+    ap.add_argument('--config',         default=None,
+                    help='Path to JSON config file  [default: config/default.json]')
     args = ap.parse_args()
-
-    if not Path(args.model_path).exists():
-        print(f'ERROR: model checkpoint not found at {args.model_path}')
-        print('Copy best_regression_model.pt into clinmriqc/classifier/ or pass --model_path.')
-        sys.exit(1)
 
     run(
         images_dir=args.images_dir,
         output_dir=args.output_dir,
-        model_path=args.model_path,
         device=args.device,
         limit=args.limit,
         resume=not args.no_resume,
         exclude_prefix=args.exclude_prefix,
+        config_path=args.config,
     )
 
 
